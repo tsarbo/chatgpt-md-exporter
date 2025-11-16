@@ -2,7 +2,6 @@
 
 namespace App\Console\Commands;
 
-use Barryvdh\DomPDF\Facade\Pdf;
 use Carbon\Carbon;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\File;
@@ -12,6 +11,7 @@ use Intervention\Image\ImageManager;
 use JsonMachine\Items;
 use JsonMachine\JsonDecoder\ExtJsonDecoder;
 use League\CommonMark\CommonMarkConverter;
+use Spatie\Browsershot\Browsershot;
 
 class ExportConversations extends Command
 {
@@ -763,9 +763,13 @@ class ExportConversations extends Command
         $html = $this->convertMarkdownToHtml($markdown, $markdownPath);
 
         try {
-            Pdf::loadHTML($html)
-                ->setPaper('a4')
-                ->save($pdfPath);
+            $this->configureBrowsershot(
+                Browsershot::html($html)
+                    ->format('A4')
+                    ->showBackground()
+                    ->margins(10, 10, 10, 10)
+                    ->waitUntilNetworkIdle()
+            )->savePdf($pdfPath);
         } catch (\Throwable $e) {
             $this->error("Failed to generate PDF for {$markdownPath}: {$e->getMessage()}");
 
@@ -807,6 +811,29 @@ CSS;
 HTML;
     }
 
+    private function configureBrowsershot(Browsershot $browsershot): Browsershot
+    {
+        $config = config('exporter.browsershot', []);
+
+        if (! empty($config['node_binary'])) {
+            $browsershot->setNodeBinary($config['node_binary']);
+        }
+
+        if (! empty($config['npm_binary'])) {
+            $browsershot->setNpmBinary($config['npm_binary']);
+        }
+
+        if (! empty($config['chrome_path'])) {
+            $browsershot->setChromePath($config['chrome_path']);
+        }
+
+        if (! empty($config['disable_sandbox'])) {
+            $browsershot->noSandbox();
+        }
+
+        return $browsershot;
+    }
+
     private function rewriteLocalLinks(string $html, string $targetPath): string
     {
         if ($html === '') {
@@ -834,23 +861,37 @@ HTML;
         $baseDir = dirname($targetPath);
 
         foreach ($dom->getElementsByTagName('img') as $img) {
-            $absolute = $this->absoluteLocalLink($img->getAttribute('src'), $baseDir);
-            if ($absolute) {
-                $img->setAttribute('src', $absolute);
+            $absolutePath = $this->absoluteLocalPath($img->getAttribute('src'), $baseDir);
+
+            if (! $absolutePath) {
+                continue;
+            }
+
+            $dataUri = $this->imageFileToDataUri($absolutePath);
+
+            if ($dataUri) {
+                $img->setAttribute('src', $dataUri);
             }
         }
 
         foreach ($dom->getElementsByTagName('a') as $anchor) {
-            $absolute = $this->absoluteLocalLink($anchor->getAttribute('href'), $baseDir);
-            if ($absolute) {
-                $anchor->setAttribute('href', $absolute);
+            $absolutePath = $this->absoluteLocalPath($anchor->getAttribute('href'), $baseDir);
+
+            if (! $absolutePath) {
+                continue;
             }
+
+            $anchor->setAttribute('data-local-path', $absolutePath);
+            $anchor->setAttribute(
+                'href',
+                'data:text/plain;charset=utf-8,' . rawurlencode($absolutePath)
+            );
         }
 
         return $dom->saveHTML();
     }
 
-    private function absoluteLocalLink(string $path, string $baseDir): ?string
+    private function absoluteLocalPath(string $path, string $baseDir): ?string
     {
         $path = trim($path);
 
@@ -870,11 +911,24 @@ HTML;
             return null;
         }
 
-        $normalized = DIRECTORY_SEPARATOR === '\\'
-            ? str_replace('\\', '/', $fullPath)
-            : $fullPath;
+        return $fullPath;
+    }
 
-        return 'file://' . str_replace(' ', '%20', $normalized);
+    private function imageFileToDataUri(string $absolutePath): ?string
+    {
+        try {
+            $contents = File::get($absolutePath);
+        } catch (\Throwable $e) {
+            return null;
+        }
+
+        $mime = File::mimeType($absolutePath) ?: 'application/octet-stream';
+
+        if (! str_starts_with($mime, 'image/')) {
+            return null;
+        }
+
+        return sprintf('data:%s;base64,%s', $mime, base64_encode($contents));
     }
 
     private function relativePath(string $fromFile, string $toFile): string

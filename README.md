@@ -11,13 +11,13 @@ A CLI-only Laravel 12 application that turns the official ChatGPT data export (s
 - **Approvals**: choose automatic export or confirm each conversation interactively.
 - **Safe filenames** with collision handling and optional attachment copying/reference modes.
 - **Image handling**: copies relevant `file_*.jpeg` assets beside each transcript, generates thumbnails, and rewrites Markdown/PDF references.
-- **Dual outputs**: Markdown, PDF (via Dompdf), or both; Markdown is converted through CommonMark so PDFs match the same transcript content.
+- **Dual outputs**: Markdown, PDF (rendered via headless Chrome through Browsershot + Puppeteer/Playwright), or both; Markdown is converted through CommonMark so PDFs match the same transcript content.
 
 ## Requirements
 - PHP 8.2+
 - Composer
 - GD or Imagick extension (Intervention Image uses GD by default)
-- NodeJS is *not* required because this is a console-only workflow.
+- Node.js 18+ with npm/yarn plus either [Puppeteer](https://pptr.dev/) or [Playwright](https://playwright.dev/) so Browsershot can talk to a headless Chrome/Chromium binary.
 
 ## Installation
 ```bash
@@ -26,7 +26,20 @@ cd chatgpt-md-exporter
 composer install
 ```
 
-The first `composer install` will also publish the Dompdf and Intervention assets that the exporter uses.
+
+## Headless PDF Engine Setup
+Browsershot proxies PDF generation to Node, so make sure a headless browser is available:
+
+```bash
+# Puppeteer (downloads Chromium automatically)
+npm install -g puppeteer
+
+# or Playwright
+npm install -g playwright
+npx playwright install chromium
+```
+
+If Node/npm or Chrome/Chromium live outside your `PATH`, set the optional overrides in `.env` (see `.env.example`) such as `BROWSERSHOT_NODE_BINARY`, `BROWSERSHOT_NPM_BINARY`, `BROWSERSHOT_CHROME_PATH`, or `BROWSERSHOT_DISABLE_SANDBOX=true`.
 
 ## Command Overview
 All exporting is handled by a single Artisan command:
@@ -93,6 +106,6 @@ Filenames are deduplicated so re-running the command won’t overwrite existing 
 ## Troubleshooting
 - **Missing images**: ensure `--assets` points to the folder that contains the `file_*.jpeg` files. If they’re missing, Markdown will display the pointer ID instead.
 - **Thumbnail errors**: the command logs warnings if GD/Imagick cannot read an image. Thumbnails are skipped for those files, but the full image link remains.
-- **PDF rendering issues**: Dompdf relies on absolute file paths, which the exporter injects automatically. If you move the exports after creation, regenerate the PDFs so the paths stay valid.
+- **PDF rendering issues**: Browsershot needs Chromium plus Node. Ensure Puppeteer/Playwright downloaded a browser and adjust the `BROWSERSHOT_*` env vars if Chrome lives outside your `PATH`. When running in restricted environments (CI, containers), you may also need to set `BROWSERSHOT_DISABLE_SANDBOX=true`.
 
 Happy exporting! :rocket:
